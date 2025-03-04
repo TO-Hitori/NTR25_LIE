@@ -12,28 +12,35 @@ from albumentations.pytorch import ToTensorV2
 import torch
 from torch.utils.data import Dataset
 
-prepare_train_data = A.Compose([
-    # 1. 空间级增强
-    A.RandomCrop(width=self.patch_size_train, height=self.patch_size_train, p=1.0),
-    A.D4(p=1.0),
-    A.Perspective(scale=[0.05, 0.1], p=0.4),
-    # 2. 亮度和对比度增强
-    A.OneOf([
-        # 光照效果
-        A.Illumination(mode="linear", intensity_range=[0.05, 0.2], effect_type="both", angle_range=[0, 360], p=1.0),
-        A.Illumination(mode="corner", intensity_range=[0.05, 0.2], effect_type="both", p=1.0),
-        A.Illumination(mode="gaussian", intensity_range=[0.05, 0.2], effect_type="both", center_range=[0.2, 0.8], sigma_range=[0.2, 0.8], p=1.0)
-
-
-    ], p=0.6),
-    # 3. 颜色和纹理增强
-    A.OneOf([
-
-    ]),
-    # 4. 归一化，转tensor
-    A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0),
-    ToTensorV2(),
-])
+# prepare_train_data = A.Compose([
+#     # 1. 空间级增强
+#     A.RandomCrop(width=self.patch_size_train, height=self.patch_size_train, p=1.0),
+#     A.D4(p=1.0),
+#     A.Perspective(scale=[0.05, 0.1], p=0.4),
+#     # 2. 亮度和对比度增强
+#     A.OneOf([
+#         # 特定方向光照效果
+#         A.Illumination(mode="linear", intensity_range=[0.05, 0.2], effect_type="both", angle_range=[0, 360], p=0.2),
+#         A.Illumination(mode="corner", intensity_range=[0.05, 0.2], effect_type="both", p=0.2),
+#         A.Illumination(mode="gaussian", intensity_range=[0.05, 0.2], effect_type="both", center_range=[0.2, 0.8], sigma_range=[0.2, 0.8], p=0.2),
+#         # 随机调整图像亮度和对比度
+#         A.RandomBrightnessContrast(brightness_limit=[-0.3, 0.1], contrast_limit=[-0.3, 0.1], brightness_by_max=False, ensure_safe_range=True, p=0.6)
+#     ], p=0.6),
+#     # 随机阴影
+#     A.RandomShadow(shadow_roi=[0, 0, 1, 1], num_shadows_limit=[1,3], shadow_dimension=3, shadow_intensity_range=[0.4, 0.6], p=0.8),
+#
+#     # 3. 颜色和纹理增强
+#     A.OneOf([
+#         A.OneOf([
+#             A.FancyPCA(alpha=0.5, p=0.5),
+#             A.Emboss(alpha=[0.2, 0.5], strength=[0.2, 0.5], p=0.5),
+#             A.ChromaticAberration(p=0.5)
+#         ], p=0.3)
+#     ]),
+#     # 4. 归一化，转tensor
+#     A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0),
+#     ToTensorV2(),
+# ])
 
 """
 数据增强：
@@ -46,8 +53,7 @@ prepare_train_data = A.Compose([
 亮度和对比度增强：CLAHE，RandomBrightnessContrast，Illumination，RandomShadow  
     1. 照明效果扰动 https://explore.albumentations.ai/transform/Illumination
     2. 亮度和对比度 https://explore.albumentations.ai/transform/RandomBrightnessContrast
-    3. 自适应直方图均衡 https://explore.albumentations.ai/transform/CLAHE
-    4. 随机阴影 https://explore.albumentations.ai/transform/RandomShadow
+    3. 随机阴影 https://explore.albumentations.ai/transform/RandomShadow
 
 颜色和纹理增强；FancyPCA，Emboss，ChromaticAberration
     1. 随机色彩变化 https://explore.albumentations.ai/transform/FancyPCA
@@ -76,14 +82,14 @@ class NTIRE_LIE_Dataset(Dataset):
             self,
             data_root: str,
             subfolder: str,
-            patch_size_tv: Union[int, Tuple[int, int]] = 256,
+            patch_size: int = 256,
     ):
         """
         Args:
             data_root: 数据集根目录 /path/to/NTIRE202x
             patch_size_tv: 训练train和验证val时的裁剪尺寸，为int时训练验证使用的尺寸一致，为tuple时分别使用不同尺寸，测试时不使用该参数
             subfolder: 子集，[Train, Val, Test]
-                - Train: 进行数据增强
+                - Train: 进行数据增强: input和gt进行相同的空间级操作，对input进行像素级扰动
                 - Val:   进行中心裁剪
                 - Test:  不进行操作
         """
@@ -94,48 +100,95 @@ class NTIRE_LIE_Dataset(Dataset):
         self.subfolder = subfolder
         self.image_name_list = self.set_name_list()
 
-        self.patch_size_train, self.patch_size_val = patch_size_tv if isinstance(patch_size_tv, tuple) else (patch_size_tv, patch_size_tv)
+        self.patch_size = patch_size
 
 
-        self.prepare_train_data = A.Compose([
-
-        ])
         self.prepare_val_data = A.Compose([
-            A.CenterCrop(height=self.prepare_val_data, width=self.patch_size_val),
-            A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            A.CenterCrop(height=self.patch_size, width=self.patch_size),
+            A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0),
+            ToTensorV2(),
+        ], additional_targets={'image1': 'image'})
+
+        self.numpy2tensor = A.Compose([
+            A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0),
             ToTensorV2(),
         ])
-        self.prepare_test_data = A.Compose([
-            A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+        self.set_prepare_train(patch_size=patch_size)
+
+    def set_prepare_train(
+            self,
+            patch_size=256,
+            p_Perspective=0.1,
+            p_l1=0.2,
+            p_l2=0.2,
+            p_l3=0.2,
+            p_rbc=0.6,
+            p_of_l=0.6,
+            p_shadow=0.8,
+            p_fec=0.2
+
+    ):
+        """
+        patch_size
+        p_Perspective
+        p_l1
+        p_l2
+        p_l3
+        p_rbc
+        p_of_l
+        p_shadow
+        p_fec
+        Returns:
+
+        """
+        self.patch_size = patch_size
+        self.prepare_train_both = A.Compose([
+            # 1. 空间级增强
+            A.RandomCrop(width=patch_size, height=patch_size, p=1.0),
+            A.D4(p=1.0),
+            A.Perspective(scale=[0.05, 0.1], p=p_Perspective),
+        ], additional_targets={'image1': 'image'})
+
+        self.prepare_train_input_only = A.Compose([
+            A.OneOf([
+                # 特定方向光照效果
+                A.Illumination(mode="linear", intensity_range=[0.05, 0.2], effect_type="both", angle_range=[0, 360],
+                               p=p_l1),
+                A.Illumination(mode="corner", intensity_range=[0.05, 0.2], effect_type="both", p=p_l2),
+                A.Illumination(mode="gaussian", intensity_range=[0.05, 0.2], effect_type="both",
+                               center_range=[0.2, 0.8], sigma_range=[0.2, 0.8], p=p_l3),
+                # 随机调整图像亮度和对比度
+                A.RandomBrightnessContrast(brightness_limit=[-0.3, 0.1], contrast_limit=[-0.3, 0.1],
+                                           brightness_by_max=False, ensure_safe_range=True, p=p_rbc)
+            ], p=p_of_l),
+            # 随机阴影
+            A.RandomShadow(shadow_roi=[0, 0, 1, 1], num_shadows_limit=[1, 3], shadow_dimension=3,
+                           shadow_intensity_range=[0.4, 0.6], p=p_shadow),
+
+            # 3. 颜色和纹理增强
+            A.OneOf([
+                A.OneOf([
+                    A.FancyPCA(alpha=0.5, p=0.5),
+                    A.Emboss(alpha=[0.2, 0.5], strength=[0.2, 0.5], p=0.5),
+                    A.ChromaticAberration(p=0.5)
+                ], p=p_fec)
+            ]),
+            # 4. 归一化，转tensor
+            A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0),
             ToTensorV2(),
         ])
 
     def set_name_list(self):
         if self.subfolder == "Test":
-            return mf.smart_listdir(mf.smart_path_join(self.data_root, self.subfolder))
+            return mf.smart_listdir(mf.smart_path_join(self.data_root, "Test"))
         elif self.subfolder in ["Train", "Val"]:
             gt_image_name_list = mf.smart_listdir(mf.smart_path_join(self.data_root, self.subfolder, "GT"))
             in_image_name_list = mf.smart_listdir(mf.smart_path_join(self.data_root, self.subfolder, "Input"))
             return list(set(gt_image_name_list) & set(in_image_name_list))
-
-        self.data_augmentation = A.Compose([
-            A.RandomCrop(width=self.patch_size_train, height=self.patch_size_train, p=1.0),
-            A.RandomRotate90(p=0.6),
-            A.RandomResizedCrop
-        ])
-
-        # transform = A.Compose([
-        #     A.RandomCrop(width=crop_size, height=crop_size, always_apply=True),
-        #     A.RandomRotate90(always_apply=True),
-        #     A.HorizontalFlip(p=0.5),
-        #     A.VerticalFlip(p=0.5),
-        #     A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        #     ToTensorV2()
-        # ], additional_targets={'image2': 'image'})  # Bind the second image
-
     @staticmethod
     def load_image(image_path):
         image_np = np.array(Image.open(mf.smart_open(image_path, 'rb')))
+        return image_np
 
 
     def __len__(self):
@@ -143,41 +196,97 @@ class NTIRE_LIE_Dataset(Dataset):
 
     def __getitem__(self, idx):
         if self.subfolder == "Test":
-            pass
+            image_in_np = self.load_image(mf.smart_path_join(self.data_root, "Test", self.image_name_list[idx]))
+            image_in_ts = self.numpy2tensor(image=image_in_np)["image"]
+            return {
+                'image_in': image_in_ts,
+                'image_gt': None
+            }
+        elif self.subfolder == "Val":
+            image_in_np = self.load_image(mf.smart_path_join(self.data_root, "Val", "Input", self.image_name_list[idx]))
+            image_gt_np = self.load_image(mf.smart_path_join(self.data_root, "Val", "GT", self.image_name_list[idx]))
+            image_sync_crop = self.prepare_val_data(image=image_in_np, image1=image_gt_np)
+            image_in_ts = image_sync_crop['image']
+            image_gt_ts = image_sync_crop['image1']
+            return {
+                'image_in': image_in_ts,
+                'image_gt': image_gt_ts
+            }
 
+        elif self.subfolder == "Train":
+            image_in_np = self.load_image(mf.smart_path_join(self.data_root, "Train", "Input", self.image_name_list[idx]))
+            image_gt_np = self.load_image(mf.smart_path_join(self.data_root, "Train", "GT", self.image_name_list[idx]))
+            image_sync_crop = self.prepare_train_both(image=image_in_np, image1=image_gt_np)
+            image_in_crop = image_sync_crop['image']
+            image_gt_crop = image_sync_crop['image1']
+
+            image_gt_ts = self.numpy2tensor(image=image_gt_crop)['image']
+            image_in_ts = self.prepare_train_input_only(image=image_in_crop)['image']
+            return {
+                'image_in': image_in_ts,
+                'image_gt': image_gt_ts,
+                'image_in_ori': self.numpy2tensor(image=image_in_crop)['image']
+            }
 
 def image_info(image):
     print("=-"*20)
     print("type:", type(image))
     print("shape:", image.shape)
     print("dtype:", image.dtype)
+    print("range: ", image.min(), image.max())
+
+def save_from_single_tansor(x, path):
+    x = (x * 0.5 + 0.5) * 255.0
+    x_np = x.permute(1, 2, 0).detach().cpu().numpy().astype(np.uint8)
+    image = Image.fromarray(x_np)
+    image.save(path)
+
+
 
 
 
 if __name__ == "__main__":
-    # data_root = r"D:\dataset\NTIRE_2025"
-    # gt_root = mf.smart_path_join(data_root, "Train", "GT")
-    # input_root = mf.smart_path_join(data_root, "Train", "Input")
-    # print("gt_root: ", gt_root)
-    #
-    # print("是否存在：", mf.smart_exists(data_root))
-    # print(gt_root)
-    #
-    # list_gt_root = mf.smart_listdir(gt_root)
-    # list_input_root = mf.smart_listdir(input_root)
-    # print("list gt root: ", list_gt_root)
-    # print("len of list: ", len(list_gt_root))
-    # print(list_input_root == list_gt_root)
-    #
-    # image_name_list = list_gt_root and list_input_root
-    # print(image_name_list)
-    # print("len of image_name_list: ", len(image_name_list))
+    """
+    # 加载数据集功能测试
+    """
+    data_root = r"D:\dataset\NTIRE_2025"
+    print(mf.smart_exists(data_root))
 
-    image_path = r"D:\dataset\NTIRE_2025\Test\141.png"
-    image_np = np.array(Image.open(mf.smart_open(image_path, 'rb')))
-    image_info(image_np)
+    dataset = NTIRE_LIE_Dataset(
+        data_root=data_root,
+        subfolder="Train",
+        patch_size=1024
+    )
+    print(dataset.__len__())
 
+    from torch.utils.data import DataLoader
+    from torchvision.utils import save_image
+    loader = DataLoader(
+        dataset=dataset,
+        batch_size=4,
+        shuffle=True,
+        num_workers=1,
+        pin_memory=True,
+        persistent_workers=True
+    )
+    print('length of dataloader: ', len(loader))
 
+    for i, sample in enumerate(loader):
+        print("=-"*20, i, "-="*20)
+        if i < 5:
+            dataset.set_prepare_train(p_shadow=0, patch_size=256)
+        elif 10 > i > 5:
+            dataset.set_prepare_train(p_shadow=1, patch_size=512)
+        else:
+            dataset.set_prepare_train(p_shadow=1, patch_size=1024)
+
+        image_info(sample['image_in'])
+        image_info(sample['image_gt'])
+
+        save_image(sample['image_in'], f'./batch_sample/input/input_{i:03d}.png', nrow=2, normalize=True)
+        save_image(sample['image_gt'], f'./batch_sample/gt/gt_{i:03d}.png', nrow=2, normalize=True)
+
+        save_image(sample['image_in_ori'], f'./batch_sample/input_ori/in_ori_{i :03d}.png', nrow=2, normalize=True)
 
 
 
