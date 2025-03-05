@@ -1,5 +1,4 @@
-import numpy as np
-import torch
+from .NTIRE_Dataset import NTIRE_LIE_Dataset
 
 
 def get_batch_idx_patch_size(global_step, steps, batch_sizes, patch_sizes):

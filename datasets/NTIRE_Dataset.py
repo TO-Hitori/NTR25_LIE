@@ -200,20 +200,20 @@ class NTIRE_LIE_Dataset(Dataset):
                 'image_in_ori': self.numpy2tensor(image=image_in_crop)['image']
             }
 
-def image_info(image):
+def image_info(image): # for debug
     print("=-"*20)
     print("--------------------type:", type(image))
     print("--------------------shape:", image.shape)
     print("--------------------dtype:", image.dtype)
     print("--------------------range: ", image.min(), image.max())
 
-def save_from_single_tansor(x, path):
+def save_from_single_tansor(x, path): # for debug
     x = (x * 0.5 + 0.5) * 255.0
     x_np = x.permute(1, 2, 0).detach().cpu().numpy().astype(np.uint8)
     image = Image.fromarray(x_np)
     image.save(path)
 
-def get_state_idx(global_step, steps):
+def get_state_idx(global_step, steps): # for train
     steps = np.array(steps)
     comp = (global_step < steps).nonzero()[0]
     state_idx = len(steps) - 1 if len(comp) == 0 else comp[0]
@@ -227,16 +227,17 @@ if __name__ == "__main__":
     # 加载数据集功能测试
     # 渐进式训练策略
     """
+    # 初始化参数
     # progressive training
     steps = [4, 8, 12, 16]
     batch_sizes = [16, 8, 4, 2]
     patch_sizes = [64, 128, 512, 1024]
     device = torch.device('cuda')
     epochs = 1000
-
     data_root = r"D:\dataset\NTIRE_2025"
     print(mf.smart_exists(data_root))
 
+   # 构建数据集列表
     ntr_datasets = [
         NTIRE_LIE_Dataset(
             data_root=data_root,
@@ -248,7 +249,7 @@ if __name__ == "__main__":
     for ds in ntr_datasets:
         print(ds.patch_size)
 
-
+    # 构建数据加载器
     data_loaders = [
         DataLoader(
             dataset=ntr_datasets[i],
@@ -264,8 +265,8 @@ if __name__ == "__main__":
         print(f"batch_size: {dl.batch_size}")
         print(f"patch_size: {dl.dataset.patch_size}")
 
+    # 开始训练循环
     global_step = 0
-
     print("--start train!!!")
     for epoch in range(epochs):
         state_idx = get_state_idx(global_step, steps)
@@ -276,6 +277,7 @@ if __name__ == "__main__":
         for i, sample in enumerate(loader):
             print(f"                    step: {global_step}, ")
             image_in = sample['image_in'].to(device)
+            image_gt = sample['image_gt'].to(device)
             image_info(image_in)
 
             global_step += 1
