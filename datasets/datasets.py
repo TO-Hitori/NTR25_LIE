@@ -2,6 +2,7 @@ import os
 from typing import Union, Tuple
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ['NO_ALBUMENTATIONS_UPDATE'] = '1'
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 from PIL import Image
 import numpy as np
@@ -12,42 +13,13 @@ from albumentations.pytorch import ToTensorV2
 import torch
 from torch.utils.data import Dataset
 
-# prepare_train_data = A.Compose([
-#     # 1. 空间级增强
-#     A.RandomCrop(width=self.patch_size_train, height=self.patch_size_train, p=1.0),
-#     A.D4(p=1.0),
-#     A.Perspective(scale=[0.05, 0.1], p=0.4),
-#     # 2. 亮度和对比度增强
-#     A.OneOf([
-#         # 特定方向光照效果
-#         A.Illumination(mode="linear", intensity_range=[0.05, 0.2], effect_type="both", angle_range=[0, 360], p=0.2),
-#         A.Illumination(mode="corner", intensity_range=[0.05, 0.2], effect_type="both", p=0.2),
-#         A.Illumination(mode="gaussian", intensity_range=[0.05, 0.2], effect_type="both", center_range=[0.2, 0.8], sigma_range=[0.2, 0.8], p=0.2),
-#         # 随机调整图像亮度和对比度
-#         A.RandomBrightnessContrast(brightness_limit=[-0.3, 0.1], contrast_limit=[-0.3, 0.1], brightness_by_max=False, ensure_safe_range=True, p=0.6)
-#     ], p=0.6),
-#     # 随机阴影
-#     A.RandomShadow(shadow_roi=[0, 0, 1, 1], num_shadows_limit=[1,3], shadow_dimension=3, shadow_intensity_range=[0.4, 0.6], p=0.8),
-#
-#     # 3. 颜色和纹理增强
-#     A.OneOf([
-#         A.OneOf([
-#             A.FancyPCA(alpha=0.5, p=0.5),
-#             A.Emboss(alpha=[0.2, 0.5], strength=[0.2, 0.5], p=0.5),
-#             A.ChromaticAberration(p=0.5)
-#         ], p=0.3)
-#     ]),
-#     # 4. 归一化，转tensor
-#     A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0),
-#     ToTensorV2(),
-# ])
 
 """
 数据增强：
 空间级增强
     1. 随机裁剪 https://explore.albumentations.ai/transform/RandomCrop
-    1. 随机八种变换 https://explore.albumentations.ai/transform/D4
-    2. 透视变换 https://explore.albumentations.ai/transform/Perspective
+    2. 随机八种变换 https://explore.albumentations.ai/transform/D4
+    3. 透视变换 https://explore.albumentations.ai/transform/Perspective
     x. 形态学操作 https://explore.albumentations.ai/transform/Morphological
 
 亮度和对比度增强：CLAHE，RandomBrightnessContrast，Illumination，RandomShadow  
@@ -82,7 +54,7 @@ class NTIRE_LIE_Dataset(Dataset):
             self,
             data_root: str,
             subfolder: str,
-            patch_size: int = 256,
+            patch_size: int = 512,
     ):
         """
         Args:
@@ -102,7 +74,6 @@ class NTIRE_LIE_Dataset(Dataset):
 
         self.patch_size = patch_size
 
-
         self.prepare_val_data = A.Compose([
             A.CenterCrop(height=self.patch_size, width=self.patch_size),
             A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0),
@@ -113,11 +84,12 @@ class NTIRE_LIE_Dataset(Dataset):
             A.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], max_pixel_value=255.0),
             ToTensorV2(),
         ])
-        self.set_prepare_train(patch_size=patch_size)
 
-    def set_prepare_train(
+        self.set_preprocessing_config(patch_size=patch_size)
+
+    def set_preprocessing_config(
             self,
-            patch_size=256,
+            patch_size,
             p_Perspective=0.1,
             p_l1=0.2,
             p_l2=0.2,
@@ -230,10 +202,10 @@ class NTIRE_LIE_Dataset(Dataset):
 
 def image_info(image):
     print("=-"*20)
-    print("type:", type(image))
-    print("shape:", image.shape)
-    print("dtype:", image.dtype)
-    print("range: ", image.min(), image.max())
+    print("--------------------type:", type(image))
+    print("--------------------shape:", image.shape)
+    print("--------------------dtype:", image.dtype)
+    print("--------------------range: ", image.min(), image.max())
 
 def save_from_single_tansor(x, path):
     x = (x * 0.5 + 0.5) * 255.0
@@ -241,52 +213,75 @@ def save_from_single_tansor(x, path):
     image = Image.fromarray(x_np)
     image.save(path)
 
+def get_state_idx(global_step, steps):
+    steps = np.array(steps)
+    comp = (global_step < steps).nonzero()[0]
+    state_idx = len(steps) - 1 if len(comp) == 0 else comp[0]
+    return state_idx
 
-
-
+from torch.utils.data import DataLoader
+from torchvision.utils import save_image
 
 if __name__ == "__main__":
     """
     # 加载数据集功能测试
+    # 渐进式训练策略
     """
+    # progressive training
+    steps = [4, 8, 12, 16]
+    batch_sizes = [16, 8, 4, 2]
+    patch_sizes = [64, 128, 512, 1024]
+    device = torch.device('cuda')
+    epochs = 1000
+
     data_root = r"D:\dataset\NTIRE_2025"
     print(mf.smart_exists(data_root))
 
-    dataset = NTIRE_LIE_Dataset(
-        data_root=data_root,
-        subfolder="Train",
-        patch_size=1024
-    )
-    print(dataset.__len__())
+    ntr_datasets = [
+        NTIRE_LIE_Dataset(
+            data_root=data_root,
+            subfolder="Train",
+            patch_size=ps
+        ) for ps in patch_sizes
+    ]
+    print(ntr_datasets)
+    for ds in ntr_datasets:
+        print(ds.patch_size)
 
-    from torch.utils.data import DataLoader
-    from torchvision.utils import save_image
-    loader = DataLoader(
-        dataset=dataset,
-        batch_size=4,
-        shuffle=True,
-        num_workers=1,
-        pin_memory=True,
-        persistent_workers=True
-    )
-    print('length of dataloader: ', len(loader))
 
-    for i, sample in enumerate(loader):
-        print("=-"*20, i, "-="*20)
-        if i < 5:
-            dataset.set_prepare_train(p_shadow=0, patch_size=256)
-        elif 10 > i > 5:
-            dataset.set_prepare_train(p_shadow=1, patch_size=512)
-        else:
-            dataset.set_prepare_train(p_shadow=1, patch_size=1024)
+    data_loaders = [
+        DataLoader(
+            dataset=ntr_datasets[i],
+            batch_size=batch_sizes[i],
+            shuffle=True,
+            num_workers=1,
+            pin_memory=True,
+            persistent_workers=True
+        ) for i in range(len(batch_sizes))
+    ]
+    print(data_loaders)
+    for dl in data_loaders:
+        print(f"batch_size: {dl.batch_size}")
+        print(f"patch_size: {dl.dataset.patch_size}")
 
-        image_info(sample['image_in'])
-        image_info(sample['image_gt'])
+    global_step = 0
 
-        save_image(sample['image_in'], f'./batch_sample/input/input_{i:03d}.png', nrow=2, normalize=True)
-        save_image(sample['image_gt'], f'./batch_sample/gt/gt_{i:03d}.png', nrow=2, normalize=True)
+    print("--start train!!!")
+    for epoch in range(epochs):
+        state_idx = get_state_idx(global_step, steps)
+        loader = data_loaders[state_idx]
+        print("---epoch: ", epoch)
+        print(f"------state_idx: {state_idx}, batch_size: {loader.batch_size}, patch_size: {loader.dataset.patch_size}")
 
-        save_image(sample['image_in_ori'], f'./batch_sample/input_ori/in_ori_{i :03d}.png', nrow=2, normalize=True)
+        for i, sample in enumerate(loader):
+            print(f"                    step: {global_step}, ")
+            image_in = sample['image_in'].to(device)
+            image_info(image_in)
+
+            global_step += 1
+
+            if state_idx != len(batch_sizes) - 1 and global_step > steps[state_idx]:
+                break
 
 
 
