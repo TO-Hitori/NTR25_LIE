@@ -2,8 +2,6 @@ import torch
 from torch import nn
 
 
-
-
 class Illumination_Estimator(nn.Module):
     def __init__(self, n_fea_middle, n_fea_in=4, n_fea_out=3):
         """
@@ -36,13 +34,6 @@ class Illumination_Estimator(nn.Module):
         light_up_map = self.conv2(light_up_feature)  # [b, 3, h, w]
 
         return light_up_feature, light_up_map
-
-
-class IG_MSA(nn.Module):
-    # Illumination-Guided Multi-head Self-Attention
-    def __init__(self, dim, dim_head):
-        super().__init__()
-
 
 
 
