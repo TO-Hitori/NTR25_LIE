@@ -1,0 +1,38 @@
+lightning:
+  seed: 42
+  exp_name: LIE_ESD_v0
+  max_epochs: 10000
+  min_epochs: 8000
+  check_val_every_n_epoch: 2
+
+model:
+  target: src.models.LIE_pl.LowLightEnhancementModel
+  params:
+    # loss
+    charbonnier_weight: 1.0
+    lpips_weight: 0.04
+    # 优化器
+    learning_rate: 2e-4
+    T_0: 10000
+    T_mult: 1
+    # 网络
+    esdnet_config:
+      target: src.models.ESDNet_arch.ESDNet
+      params:
+        en_channels: 48
+        en_growth_rate: 32
+        de_channels: 64
+        de_growth_rate: 32
+        sam_layers: 2
+
+data:
+  data_path: "D:/dataset/NTIRE_2025"
+  patch_size_train: 128
+  patch_size_val: 512
+  batch_size: 16
+  num_workers: 1
+
+
+
+
+
