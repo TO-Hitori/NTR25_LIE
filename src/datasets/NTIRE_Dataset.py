@@ -11,6 +11,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 import torch
+from torch.nn import functional as F
 from torch.utils.data import Dataset
 
 
@@ -157,11 +158,11 @@ class NTIRE_LIE_Dataset(Dataset):
             gt_image_name_list = mf.smart_listdir(mf.smart_path_join(self.data_root, self.subfolder, "GT"))
             in_image_name_list = mf.smart_listdir(mf.smart_path_join(self.data_root, self.subfolder, "Input"))
             return list(set(gt_image_name_list) & set(in_image_name_list))
+
     @staticmethod
     def load_image(image_path):
         image_np = np.array(Image.open(mf.smart_open(image_path, 'rb')))
         return image_np
-
 
     def __len__(self):
         return len(self.image_name_list)
@@ -172,7 +173,6 @@ class NTIRE_LIE_Dataset(Dataset):
             image_in_ts = self.numpy2tensor(image=image_in_np)["image"]
             return {
                 'image_in': image_in_ts,
-                'image_gt': None
             }
         elif self.subfolder == "Val":
             image_in_np = self.load_image(mf.smart_path_join(self.data_root, "Val", "Input", self.image_name_list[idx]))
@@ -193,11 +193,16 @@ class NTIRE_LIE_Dataset(Dataset):
             image_gt_crop = image_sync_crop['image1']
 
             image_gt_ts = self.numpy2tensor(image=image_gt_crop)['image']
+            image_gt_ts_2 = F.interpolate(image_gt_ts.unsqueeze(0), scale_factor=0.5, mode='bilinear').squeeze(0)
+            image_gt_ts_4 = F.interpolate(image_gt_ts.unsqueeze(0), scale_factor=0.25, mode='bilinear').squeeze(0)
             image_in_ts = self.prepare_train_input_only(image=image_in_crop)['image']
+
             return {
                 'image_in': image_in_ts,
                 'image_gt': image_gt_ts,
-                'image_in_ori': self.numpy2tensor(image=image_in_crop)['image']
+                'image_gt_2': image_gt_ts_2,
+                'image_gt_4': image_gt_ts_4,
+                'image_in_ori': self.numpy2tensor(image=image_in_crop)['image'] # 未进行数据增强的输入图像
             }
 
 def image_info(image): # for debug
@@ -213,6 +218,11 @@ def save_from_single_tansor(x, path): # for debug
     image = Image.fromarray(x_np)
     image.save(path)
 
+
+def cumulative_sum(lst):
+    return [sum(lst[:i+1]) for i in range(len(lst))]
+
+
 def get_state_idx(global_step, steps): # for train
     steps = np.array(steps)
     comp = (global_step < steps).nonzero()[0]
@@ -222,6 +232,11 @@ def get_state_idx(global_step, steps): # for train
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 
+
+
+from PIL import Image
+
+
 if __name__ == "__main__":
     """
     # 加载数据集功能测试
@@ -229,9 +244,10 @@ if __name__ == "__main__":
     """
     # 初始化参数
     # progressive training
-    steps = [4, 8, 12, 16]
-    batch_sizes = [16, 8, 4, 2]
-    patch_sizes = [64, 128, 512, 1024]
+    steps_per_stage = [400, 4, 4, 4]
+    steps = cumulative_sum(steps_per_stage)
+    batch_sizes = [16, 1, 1, 1]
+    patch_sizes = [1024, 128, 512, 1024]
     device = torch.device('cuda')
     epochs = 1000
     data_root = r"D:\dataset\NTIRE_2025"
@@ -275,12 +291,24 @@ if __name__ == "__main__":
         print(f"------state_idx: {state_idx}, batch_size: {loader.batch_size}, patch_size: {loader.dataset.patch_size}")
 
         for i, sample in enumerate(loader):
+            global_step += 1
             print(f"                    step: {global_step}, ")
             image_in = sample['image_in'].to(device)
             image_gt = sample['image_gt'].to(device)
-            image_info(image_in)
+            image_gt_2 = sample['image_gt_2'].to(device)
+            image_gt_4 = sample['image_gt_4'].to(device)
 
-            global_step += 1
+
+
+            image_gt, image_gt_2, image_gt_4 = map(lambda x: x*0.5+0.5, (image_gt, image_gt_2, image_gt_4))
+            image_info(image_gt)
+            image_info(image_gt_2)
+            image_info(image_gt_4)
+
+            save_image(image_gt, f'./image_gt_{i}.png')
+            save_image(image_gt_2, f'./image_gt_2_{i}.png')
+            save_image(image_gt_4, f'./image_gt_4_{i}.png')
+
 
             if state_idx != len(batch_sizes) - 1 and global_step > steps[state_idx]:
                 break

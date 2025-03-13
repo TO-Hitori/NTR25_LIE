@@ -1,0 +1,13 @@
+esdnet_config:
+  target: src.models.ESDNet_arch.ESDNet
+  params:
+    en_channels: 48
+    en_growth_rate: 32
+    de_channels: 64
+    de_growth_rate: 32
+    sam_layers: 2
+learning_rate: 0.0002
+T_0: 10000
+T_mult: 1
+charbonnier_weight: 1.0
+lpips_weight: 0.04
